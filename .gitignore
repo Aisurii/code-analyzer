@@ -47,9 +47,6 @@ temp/
 *.tmp
 
 # Project files
-project-status
-project-status/
-quickstart
-quickstart/
-setup
-setup/
+PROJECT_STATUS.md
+QUICK_START.md
+SETUP.md
