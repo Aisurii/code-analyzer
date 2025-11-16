@@ -1,6 +1,5 @@
 import Parser from 'tree-sitter';
-import JavaScript from 'tree-sitter-javascript';
-import TypeScript from 'tree-sitter-typescript';
+import Python from 'tree-sitter-python';
 import { BaseParser } from './BaseParser';
 import { FileAnalysis, FunctionInfo, ComplexityMetrics, CodeIssue, IssueType, IssueCategory, DEFAULT_CONFIG, ClassInfo } from '../types';
 import { CyclomaticComplexityCalculator } from '../analyzers/CyclomaticComplexity';
@@ -12,32 +11,19 @@ import { MemoryLeakDetector } from '../analyzers/MemoryLeakDetector';
 import { ArchitectureDetector } from '../analyzers/ArchitectureDetector';
 import { FixGenerator } from '../analyzers/FixGenerator';
 
-export class JavaScriptParser extends BaseParser {
+export class PythonParser extends BaseParser {
   private cyclomaticCalc: CyclomaticComplexityCalculator;
   private cognitiveCalc: CognitiveComplexityCalculator;
-  private isTypeScript: boolean;
 
-  constructor(isTypeScript = false) {
-    super(isTypeScript ? 'TypeScript' : 'JavaScript');
-    this.isTypeScript = isTypeScript;
-
-    // Set the appropriate language
-    if (isTypeScript) {
-      this.parser.setLanguage(TypeScript.typescript);
-    } else {
-      this.parser.setLanguage(JavaScript);
-    }
-
-    this.cyclomaticCalc = new CyclomaticComplexityCalculator(
-      isTypeScript ? 'typescript' : 'javascript'
-    );
-    this.cognitiveCalc = new CognitiveComplexityCalculator(
-      isTypeScript ? 'typescript' : 'javascript'
-    );
+  constructor() {
+    super('Python');
+    this.parser.setLanguage(Python);
+    this.cyclomaticCalc = new CyclomaticComplexityCalculator('python');
+    this.cognitiveCalc = new CognitiveComplexityCalculator('python');
   }
 
   getSupportedExtensions(): string[] {
-    return this.isTypeScript ? ['.ts', '.tsx'] : ['.js', '.jsx'];
+    return ['.py'];
   }
 
   parse(code: string, filePath: string): FileAnalysis {
@@ -49,7 +35,7 @@ export class JavaScriptParser extends BaseParser {
     const classes = this.analyzeClasses(root, code);
     const overallMetrics = this.calculateOverallMetrics(functions, lineCount);
 
-    // Run file-level architecture detection (God Class, Tight Coupling)
+    // Run file-level architecture detection
     const architectureDetector = new ArchitectureDetector(code);
     const fileIssues = architectureDetector.detectArchitectureIssues(root);
 
@@ -78,20 +64,26 @@ export class JavaScriptParser extends BaseParser {
   }
 
   private analyzeFunctions(root: Parser.SyntaxNode, code: string): FunctionInfo[] {
-    const functionTypes = [
-      'function_declaration',
-      'function',
-      'arrow_function',
-      'method_definition',
-      'function_expression',
-    ];
-
+    const functionTypes = ['function_definition'];
     const functionNodes = this.extractFunctions(root, functionTypes);
-    return functionNodes.map(node => this.analyzeFunction(node, code));
+
+    // Filter out class methods (they'll be handled in analyzeClasses)
+    const standaloneFunctions = functionNodes.filter(node => {
+      let parent = node.parent;
+      while (parent) {
+        if (parent.type === 'class_definition') {
+          return false;
+        }
+        parent = parent.parent;
+      }
+      return true;
+    });
+
+    return standaloneFunctions.map(node => this.analyzeFunction(node, code));
   }
 
   private analyzeClasses(root: Parser.SyntaxNode, code: string): ClassInfo[] {
-    const classTypes = ['class_declaration', 'class'];
+    const classTypes = ['class_definition'];
     const classNodes: Parser.SyntaxNode[] = [];
 
     const traverse = (node: Parser.SyntaxNode) => {
@@ -114,12 +106,11 @@ export class JavaScriptParser extends BaseParser {
 
     // Extract methods from the class
     const methods: FunctionInfo[] = [];
-    const methodNodes = node.children.find(child => child.type === 'class_body');
+    const classBody = node.childForFieldName('body');
 
-    if (methodNodes) {
-      for (const child of methodNodes.children) {
-        if (child.type === 'method_definition' || child.type === 'field_definition') {
-          // Analyze method as a function
+    if (classBody) {
+      for (const child of classBody.children) {
+        if (child.type === 'function_definition') {
           const methodInfo = this.analyzeFunction(child, code);
           methods.push(methodInfo);
         }
@@ -139,13 +130,8 @@ export class JavaScriptParser extends BaseParser {
   }
 
   private getClassName(node: Parser.SyntaxNode): string {
-    // Find the class name identifier
-    for (const child of node.children) {
-      if (child.type === 'identifier' || child.type === 'type_identifier') {
-        return child.text;
-      }
-    }
-    return 'AnonymousClass';
+    const nameNode = node.childForFieldName('name');
+    return nameNode ? nameNode.text : 'AnonymousClass';
   }
 
   private calculateClassMetrics(methods: FunctionInfo[]): ComplexityMetrics {
@@ -165,8 +151,8 @@ export class JavaScriptParser extends BaseParser {
       linesOfCode: totalLOC,
       effectiveLinesOfCode: totalEffectiveLOC,
       nestingDepth: maxNesting,
-      functionLength: methods.length, // Number of methods in class
-      parameterCount: 0, // Not applicable
+      functionLength: methods.length,
+      parameterCount: 0,
     };
   }
 
@@ -180,7 +166,7 @@ export class JavaScriptParser extends BaseParser {
     const cyclomaticComplexity = this.cyclomaticCalc.calculate(node);
     const cognitiveComplexity = this.cognitiveCalc.calculate(node);
     const nestingDepth = this.calculateMaxNesting(node);
-    const parameterCount = this.countParameters(node);
+    const parameterCount = this.countPythonParameters(node);
 
     const functionCode = code.substring(node.startIndex, node.endIndex);
     const lineCount = this.countLines(functionCode);
@@ -198,14 +184,13 @@ export class JavaScriptParser extends BaseParser {
     // Detect complexity issues
     const issues = this.detectIssues(metrics, name, startLine);
 
-    // Detect code smells, performance, security, memory leaks, and architecture issues
+    // Detect code smells, performance, and security issues
     const codeSmellDetector = new CodeSmellDetector(functionCode);
     const performanceDetector = new PerformanceDetector(functionCode);
     const securityDetector = new SecurityDetector(functionCode);
     const memoryLeakDetector = new MemoryLeakDetector(functionCode);
     const architectureDetector = new ArchitectureDetector(functionCode);
 
-    // Run all detectors
     issues.push(...codeSmellDetector.detectSmells(node));
     issues.push(...performanceDetector.detectPerformanceIssues(node));
     issues.push(...securityDetector.detectSecurityIssues(node));
@@ -237,8 +222,7 @@ export class JavaScriptParser extends BaseParser {
       'if_statement',
       'for_statement',
       'while_statement',
-      'do_statement',
-      'switch_statement',
+      'with_statement',
       'try_statement',
       'block',
     ];
@@ -256,6 +240,26 @@ export class JavaScriptParser extends BaseParser {
 
     traverse(node, 0);
     return maxDepth;
+  }
+
+  private countPythonParameters(node: Parser.SyntaxNode): number {
+    const params = node.childForFieldName('parameters');
+    if (!params) return 0;
+
+    // Count parameter nodes (excluding self, cls, parentheses, commas)
+    let count = 0;
+    for (const child of params.children) {
+      if (child.type === 'identifier' || child.type === 'typed_parameter' ||
+          child.type === 'default_parameter' || child.type === 'typed_default_parameter') {
+        // Skip 'self' and 'cls' parameters
+        const paramName = child.text.split(':')[0].split('=')[0].trim();
+        if (paramName !== 'self' && paramName !== 'cls') {
+          count++;
+        }
+      }
+    }
+
+    return count;
   }
 
   private detectIssues(metrics: ComplexityMetrics, functionName: string, line: number): CodeIssue[] {
@@ -318,7 +322,7 @@ export class JavaScriptParser extends BaseParser {
         severity: 'medium',
         line,
         message: `Function '${functionName}' has ${metrics.parameterCount} parameters (max: ${config.maxParameters})`,
-        suggestion: 'Consider using an options object or splitting the function',
+        suggestion: 'Consider using a dictionary or dataclass for parameters',
       });
     }
 
@@ -344,8 +348,8 @@ export class JavaScriptParser extends BaseParser {
       linesOfCode: lineCount.total,
       effectiveLinesOfCode: lineCount.effective,
       nestingDepth: maxNesting,
-      functionLength: 0, // Not applicable for overall
-      parameterCount: 0, // Not applicable for overall
+      functionLength: 0,
+      parameterCount: 0,
     };
   }
 }

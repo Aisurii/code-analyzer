@@ -139,3 +139,22 @@ export const DEFAULT_CONFIG: AnalyzerConfig = {
   maxParameters: 5,
   trackHistory: false,
 };
+
+export interface CLIOptions {
+  language?: string;
+  output?: 'table' | 'json' | 'html';
+  threshold?: string;
+  history?: boolean;
+  recursive?: boolean;
+}
+
+export interface AnalysisError {
+  filePath: string;
+  error: string;
+  errorType: 'FILE_NOT_FOUND' | 'UNSUPPORTED_EXTENSION' | 'PARSE_ERROR' | 'READ_ERROR';
+}
+
+export interface AnalysisResult {
+  successful: FileAnalysis[];
+  failed: AnalysisError[];
+}

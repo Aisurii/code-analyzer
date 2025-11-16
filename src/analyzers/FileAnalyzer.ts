@@ -1,7 +1,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { FileAnalysis, ParserInterface } from '../types';
+import { FileAnalysis, ParserInterface, AnalysisResult, AnalysisError } from '../types';
 import { JavaScriptParser } from '../parsers/JavaScriptParser';
+import { PythonParser } from '../parsers/PythonParser';
 
 /**
  * Main file analyzer that coordinates parsing and analysis
@@ -27,7 +28,11 @@ export class FileAnalyzer {
       this.parsers.set(ext, tsParser);
     });
 
-    // TODO: Add Python parser
+    // Python
+    const pyParser = new PythonParser();
+    pyParser.getSupportedExtensions().forEach(ext => {
+      this.parsers.set(ext, pyParser);
+    });
   }
 
   /**
@@ -53,14 +58,51 @@ export class FileAnalyzer {
    * Analyze multiple files
    */
   analyzeFiles(filePaths: string[]): FileAnalysis[] {
-    return filePaths.map(filePath => {
+    const result = this.analyzeFilesWithErrors(filePaths);
+
+    // Log errors but still return successful analyses
+    if (result.failed.length > 0) {
+      console.error(`\n⚠️  Failed to analyze ${result.failed.length} file(s):`);
+      result.failed.forEach(err => {
+        console.error(`  - ${err.filePath}: ${err.error}`);
+      });
+    }
+
+    return result.successful;
+  }
+
+  /**
+   * Analyze multiple files and return both successful and failed analyses
+   */
+  analyzeFilesWithErrors(filePaths: string[]): AnalysisResult {
+    const successful: FileAnalysis[] = [];
+    const failed: AnalysisError[] = [];
+
+    for (const filePath of filePaths) {
       try {
-        return this.analyzeFile(filePath);
+        const analysis = this.analyzeFile(filePath);
+        successful.push(analysis);
       } catch (error) {
-        console.error(`Error analyzing ${filePath}:`, error);
-        return null;
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        let errorType: AnalysisError['errorType'] = 'PARSE_ERROR';
+
+        if (!fs.existsSync(filePath)) {
+          errorType = 'FILE_NOT_FOUND';
+        } else if (errorMessage.includes('No parser available')) {
+          errorType = 'UNSUPPORTED_EXTENSION';
+        } else if (errorMessage.includes('EACCES') || errorMessage.includes('permission')) {
+          errorType = 'READ_ERROR';
+        }
+
+        failed.push({
+          filePath,
+          error: errorMessage,
+          errorType,
+        });
       }
-    }).filter((analysis): analysis is FileAnalysis => analysis !== null);
+    }
+
+    return { successful, failed };
   }
 
   /**

@@ -33,15 +33,44 @@ export class CodeSmellDetector {
    */
   private detectMagicNumbers(node: Parser.SyntaxNode): CodeIssue[] {
     const issues: CodeIssue[] = [];
-    const acceptableNumbers = new Set([0, 1, -1, 2, 10, 100, 1000]);
+
+    // Common acceptable numbers that don't need constants
+    const acceptableNumbers = new Set([
+      0, 1, -1, 2,          // Basic values
+      10, 100, 1000,        // Powers of 10
+      60, 24, 7,            // Time (seconds, hours, days)
+      200, 201, 204,        // HTTP success codes
+      400, 401, 403, 404,   // HTTP client errors
+      500, 502, 503,        // HTTP server errors
+      16, 32, 64, 128, 256, 512, 1024  // Powers of 2 (common in CS)
+    ]);
+
+    const isTimeRelated = (n: Parser.SyntaxNode): boolean => {
+      const text = n.parent?.text || '';
+      return /setTimeout|setInterval|delay|wait|sleep|millisecond|second|minute|hour|day/i.test(text);
+    };
+
+    const isHTTPStatus = (value: number): boolean => {
+      return value >= 100 && value < 600;
+    };
+
+    const isPercentage = (n: Parser.SyntaxNode): boolean => {
+      const parentText = n.parent?.text || '';
+      return /percent|%|ratio|fraction/i.test(parentText) ||
+             (n.text === '100' && parentText.includes('/'));
+    };
 
     const traverse = (n: Parser.SyntaxNode) => {
       if (n.type === 'number') {
-        const value = parseInt(n.text, 10);
+        const value = parseFloat(n.text);
         const line = n.startPosition.row + 1;
 
-        // Skip acceptable numbers and array indices
-        if (!acceptableNumbers.has(value) && !this.isArrayIndex(n)) {
+        // Skip acceptable numbers, array indices, time-related, HTTP codes, and percentages
+        if (!acceptableNumbers.has(value) &&
+            !this.isArrayIndex(n) &&
+            !isTimeRelated(n) &&
+            !(isHTTPStatus(value) && (n.parent?.parent?.text || '').includes('status')) &&
+            !isPercentage(n)) {
           // Get code snippet from parent context - walk up to find meaningful context
           let codeSnippet = n.text;
           if (n.parent) {
@@ -94,15 +123,93 @@ export class CodeSmellDetector {
    */
   private detectPoorNaming(node: Parser.SyntaxNode): CodeIssue[] {
     const issues: CodeIssue[] = [];
-    const badNames = new Set(['x', 'y', 'z', 'data', 'temp', 'tmp', 'foo', 'bar', 'baz', 'obj', 'arr']);
+    const badNames = new Set(['data', 'temp', 'tmp', 'foo', 'bar', 'baz']);
+    const loopVariables = new Set(['i', 'j', 'k', 'l', 'm', 'n']);
+
+    // Common acceptable abbreviations in different domains
+    const commonAbbreviations = new Set([
+      // Web/HTTP
+      'req', 'res', 'err', 'msg', 'url', 'uri', 'api', 'id', 'db', 'ctx', 'app',
+      // Functions/callbacks
+      'fn', 'cb', 'acc', 'cur', 'prev', 'next',
+      // Math/coordinates
+      'x', 'y', 'z', 'dx', 'dy', 'dz',
+      // Common short forms
+      'str', 'num', 'arr', 'obj', 'val', 'key', 'idx', 'len', 'max', 'min',
+      // Error handling
+      'e', 'ex',
+      // Configuration
+      'cfg', 'env', 'opts', 'args', 'params'
+    ]);
+
+    const isInLoopContext = (n: Parser.SyntaxNode): boolean => {
+      let parent = n.parent;
+      while (parent) {
+        if (parent.type === 'for_statement' ||
+            parent.type === 'for_in_statement' ||
+            parent.type === 'while_statement') {
+          return true;
+        }
+        parent = parent.parent;
+      }
+      return false;
+    };
+
+    const isCallbackParam = (n: Parser.SyntaxNode): boolean => {
+      // Check if this identifier is a parameter in an arrow function or callback
+      let parent = n.parent;
+      while (parent) {
+        if (parent.type === 'arrow_function' || parent.type === 'function_expression') {
+          // Check if it's a common callback pattern like (a, b) => a - b
+          const params = parent.childForFieldName('parameters');
+          if (params && params.namedChildCount <= 2) {
+            return true;
+          }
+        }
+        parent = parent.parent;
+      }
+      return false;
+    };
+
+    const isCatchParam = (n: Parser.SyntaxNode): boolean => {
+      let parent = n.parent;
+      while (parent && parent.type !== 'program') {
+        if (parent.type === 'catch_clause') {
+          return true;
+        }
+        parent = parent.parent;
+      }
+      return false;
+    };
 
     const checkIdentifier = (n: Parser.SyntaxNode) => {
       if (n.type === 'identifier') {
         const name = n.text;
         const line = n.startPosition.row + 1;
 
-        // Check for single letter or common bad names
-        if (name.length === 1 || badNames.has(name.toLowerCase())) {
+        // Skip common loop variables if they're in a loop context
+        if (loopVariables.has(name) && isInLoopContext(n)) {
+          return;
+        }
+
+        // Skip common abbreviations
+        if (commonAbbreviations.has(name.toLowerCase())) {
+          return;
+        }
+
+        // Skip callback parameters with short names
+        if (isCallbackParam(n)) {
+          return;
+        }
+
+        // Skip error parameters in catch blocks
+        if ((name === 'e' || name === 'err' || name === 'error') && isCatchParam(n)) {
+          return;
+        }
+
+        // Check for single letter (excluding allowed cases) or common bad names
+        if ((name.length === 1 && !loopVariables.has(name) && !commonAbbreviations.has(name)) ||
+            badNames.has(name.toLowerCase())) {
           issues.push({
             type: IssueType.POOR_NAMING,
             category: IssueCategory.CODE_SMELL,
@@ -143,9 +250,37 @@ export class CodeSmellDetector {
 
   /**
    * Detect console.log statements (debug code left behind)
+   * Allows console.error, console.warn, console.info as they're proper logging methods
    */
   private detectConsoleLog(node: Parser.SyntaxNode): CodeIssue[] {
     const issues: CodeIssue[] = [];
+
+    // Check if the file uses a proper logging framework
+    const usesLoggingFramework = (): boolean => {
+      const loggingFrameworks = [
+        'winston', 'bunyan', 'pino', 'log4js', 'loglevel',
+        'logger', 'Logger', 'log.', 'logging'
+      ];
+
+      return loggingFrameworks.some(framework => this.code.includes(framework));
+    };
+
+    // Check if this appears to be a test or development file
+    const isTestOrDevFile = (): boolean => {
+      const lines = this.code.split('\n').slice(0, 50); // Check first 50 lines
+      const header = lines.join('\n').toLowerCase();
+
+      return header.includes('test') ||
+             header.includes('spec') ||
+             header.includes('debug') ||
+             header.includes('development') ||
+             header.includes('example') ||
+             header.includes('demo');
+    };
+
+    // If file uses a logging framework or is a test file, be more lenient
+    const hasProperLogging = usesLoggingFramework();
+    const isDevFile = isTestOrDevFile();
 
     const traverse = (n: Parser.SyntaxNode) => {
       if (n.type === 'call_expression') {
@@ -154,7 +289,13 @@ export class CodeSmellDetector {
           const objectNode = functionNode.childForFieldName('object');
           const propertyNode = functionNode.childForFieldName('property');
 
+          // Only flag console.log, not console.error/warn/info
           if (objectNode?.text === 'console' && propertyNode?.text === 'log') {
+            // Skip if file has proper logging framework or is a dev/test file
+            if (hasProperLogging || isDevFile) {
+              return;
+            }
+
             const line = n.startPosition.row + 1;
             // Extract code from parent statement node for better context
             let codeSnippet = n.text.trim();
@@ -168,7 +309,7 @@ export class CodeSmellDetector {
               severity: 'low',
               line,
               message: 'console.log() statement found - remove before production',
-              suggestion: 'Use a proper logging library or remove debug statements',
+              suggestion: 'Use a proper logging library (winston, pino, etc.) or console.error/warn/info for intentional logging',
               codeSnippet,
             });
           }
@@ -185,15 +326,45 @@ export class CodeSmellDetector {
   }
 
   /**
-   * Detect empty catch blocks
+   * Detect empty catch blocks (without explanatory comments)
    */
   private detectEmptyCatch(node: Parser.SyntaxNode): CodeIssue[] {
     const issues: CodeIssue[] = [];
+
+    const hasExplanatoryComment = (bodyNode: Parser.SyntaxNode): boolean => {
+      // Get the line range of the catch block
+      const startLine = bodyNode.startPosition.row;
+      const endLine = bodyNode.endPosition.row;
+
+      // Check if there's a comment in the catch block explaining the empty catch
+      const lines = this.code.split('\n');
+      for (let i = startLine; i <= endLine; i++) {
+        const line = lines[i]?.toLowerCase() || '';
+        // Look for comments indicating intentional empty catch
+        if (line.includes('//') || line.includes('/*')) {
+          if (line.includes('intentional') ||
+              line.includes('ignore') ||
+              line.includes('expected') ||
+              line.includes('optional') ||
+              line.includes('no-op') ||
+              line.includes('noop') ||
+              line.includes('safe to ignore')) {
+            return true;
+          }
+        }
+      }
+      return false;
+    };
 
     const traverse = (n: Parser.SyntaxNode) => {
       if (n.type === 'catch_clause') {
         const bodyNode = n.childForFieldName('body');
         if (bodyNode && this.isEmptyBlock(bodyNode)) {
+          // Skip if there's an explanatory comment
+          if (hasExplanatoryComment(bodyNode)) {
+            return;
+          }
+
           const line = n.startPosition.row + 1;
           issues.push({
             type: IssueType.EMPTY_CATCH,
@@ -201,7 +372,7 @@ export class CodeSmellDetector {
             severity: 'medium',
             line,
             message: 'Empty catch block - errors are being silently ignored',
-            suggestion: 'Handle the error appropriately or at least log it',
+            suggestion: 'Handle the error appropriately, log it, or add a comment explaining why it\'s intentionally ignored',
             codeSnippet: this.getLineContent(line),
           });
         }
@@ -250,10 +421,25 @@ export class CodeSmellDetector {
   private detectTypeCoercion(node: Parser.SyntaxNode): CodeIssue[] {
     const issues: CodeIssue[] = [];
 
+    const isNullCheck = (n: Parser.SyntaxNode): boolean => {
+      // Allow == null and != null as it's a common intentional pattern
+      // to check for both null and undefined
+      const left = n.childForFieldName('left');
+      const right = n.childForFieldName('right');
+
+      return (left?.text === 'null' || right?.text === 'null') ||
+             (left?.text === 'undefined' || right?.text === 'undefined');
+    };
+
     const traverse = (n: Parser.SyntaxNode) => {
       if (n.type === 'binary_expression') {
         const operator = n.childForFieldName('operator');
         if (operator && (operator.text === '==' || operator.text === '!=')) {
+          // Skip intentional null/undefined checks
+          if (isNullCheck(n)) {
+            return;
+          }
+
           const line = n.startPosition.row + 1;
           const replacement = operator.text === '==' ? '===' : '!==';
           issues.push({
@@ -262,7 +448,7 @@ export class CodeSmellDetector {
             severity: 'medium',
             line,
             message: `Using '${operator.text}' instead of '${replacement}' - can cause unexpected behavior`,
-            suggestion: `Use '${replacement}' for strict equality comparison`,
+            suggestion: `Use '${replacement}' for strict equality comparison (or use == null if checking for null/undefined)`,
             codeSnippet: this.getLineContent(line),
           });
         }

@@ -116,12 +116,33 @@ export class SecurityDetector {
     const issues: CodeIssue[] = [];
     const secretPatterns = [
       { pattern: /api[_-]?key/i, name: 'API key' },
+      { pattern: /api[_-]?token/i, name: 'API token' },
       { pattern: /secret[_-]?key/i, name: 'secret key' },
       { pattern: /password/i, name: 'password' },
-      { pattern: /token/i, name: 'token' },
-      { pattern: /auth/i, name: 'auth credential' },
+      { pattern: /bearer[_-]?token/i, name: 'bearer token' },
+      { pattern: /auth[_-]?token/i, name: 'auth token' },
       { pattern: /private[_-]?key/i, name: 'private key' },
+      { pattern: /access[_-]?key/i, name: 'access key' },
+      { pattern: /client[_-]?secret/i, name: 'client secret' },
+      { pattern: /stripe[_-]?key/i, name: 'Stripe key' },
+      { pattern: /aws[_-]?secret/i, name: 'AWS secret' },
     ];
+
+    const placeholderPatterns = [
+      /YOUR_/i,
+      /REPLACE/i,
+      /EXAMPLE/i,
+      /TEST/i,
+      /DEMO/i,
+      /xxx+/i,
+      /\.\.\./,
+      /changeme/i,
+      /placeholder/i,
+    ];
+
+    const isPlaceholder = (value: string): boolean => {
+      return placeholderPatterns.some(pattern => pattern.test(value));
+    };
 
     const traverse = (n: Parser.SyntaxNode) => {
       if (n.type === 'variable_declarator' || n.type === 'property_identifier') {
@@ -134,8 +155,8 @@ export class SecurityDetector {
           for (const { pattern, name: secretType } of secretPatterns) {
             if (pattern.test(name) && valueNode.type === 'string') {
               const value = valueNode.text;
-              // Skip empty strings and obvious placeholders
-              if (value.length > 4 && !value.includes('YOUR_') && !value.includes('REPLACE')) {
+              // Skip empty strings, short values, and obvious placeholders
+              if (value.length > 6 && !isPlaceholder(value)) {
                 const line = n.startPosition.row + 1;
                 issues.push({
                   type: IssueType.HARDCODED_SECRET,

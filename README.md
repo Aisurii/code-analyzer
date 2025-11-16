@@ -61,16 +61,31 @@ complexity analyze src/ --output json
 ### Available Commands
 
 - `complexity analyze <path>` - Analyze a file or directory
-- `complexity report` - Generate a detailed report (coming soon)
-- `complexity stats` - Show historical statistics (coming soon)
+- `complexity report` - Generate a detailed HTML/JSON report from history
+- `complexity stats` - Show historical statistics and trends
+- `complexity init` - Create a default configuration file (.complexityrc.json)
 
 ### CLI Options
 
+#### Analyze Command
 - `-l, --language <lang>` - Filter by language (js, ts, py)
 - `-o, --output <format>` - Output format (table, json, html) - default: table
 - `-t, --threshold <number>` - Complexity threshold for warnings - default: 10
-- `--history` - Track in database for historical analysis
+- `--history` - Save analysis to database for historical tracking
 - `--recursive` - Recursively analyze directories (default: true)
+
+#### Report Command
+- `-i, --id <id>` - Analysis ID from history (uses latest if not specified)
+- `-o, --output <path>` - Output file path (default: complexity-report.html)
+- `-f, --format <format>` - Output format (html, json) - default: html
+
+#### Stats Command
+- `-l, --list` - List recent analyses
+- `-c, --compare <id1,id2>` - Compare two analyses
+- `-f, --file <path>` - Show history for a specific file
+
+#### Init Command
+- `-o, --output <path>` - Output file path (default: .complexityrc.json)
 
 ## Supported Languages
 
@@ -147,24 +162,29 @@ npm start
 
 ## Project Status
 
-🚧 Under active development
+✅ Production Ready!
 
-### Completed
-- [x] Project setup
+### Completed Features
+- [x] Project setup with TypeScript
+- [x] Multi-language parsing (JavaScript, TypeScript, Python)
 - [x] Core parsing engine (Tree-sitter)
 - [x] Complexity calculations (Cyclomatic & Cognitive)
-- [x] CLI interface
-- [x] Performance detection
-- [x] Security detection
+- [x] Class analysis support
+- [x] CLI interface with multiple commands
+- [x] Performance issue detection
+- [x] Security vulnerability detection
 - [x] Memory leak detection
 - [x] Code smell detection
-- [x] Architecture analysis
-- [x] Fix generation
-
-### In Progress
-- [ ] Web visualizations
-- [ ] Historical tracking database
-- [ ] HTML report generation
+- [x] Architecture problem detection
+- [x] Enhanced fix generation (14 fix types)
+- [x] Configuration file support (.complexityrc.json)
+- [x] Error handling with detailed reporting
+- [x] Comprehensive test suite (Jest)
+- [x] HTML report generation
+- [x] Historical tracking database
+- [x] Statistics and comparison tools
+- [x] Type-safe implementation
+- [x] Reduced false positives
 
 ## License
 

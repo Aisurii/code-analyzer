@@ -50,3 +50,10 @@ temp/
 PROJECT_STATUS.md
 QUICK_START.md
 SETUP.md
+IMPROVEMENTS.md
+FALSE_POSITIVE_REDUCTIONS.md
+
+# Analysis output
+complexity-report.html
+.complexity-history.json
+.complexityrc.json
